@@ -57,18 +57,18 @@
         
         #toast {
             visibility: hidden;
-            min-width: 250px;
+            min-width: 280px;
             background-color: #323232;
             color: #fff;
             text-align: center;
-            border-radius: 4px;
+            border-radius: 8px;
             padding: 16px;
             position: fixed;
             z-index: 100;
             left: 50%;
             bottom: 30px;
             transform: translateX(-50%);
-            box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
         }
         #toast.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
 
@@ -169,14 +169,20 @@
                     <div class="flex space-x-3" id="materialCircles"></div>
                 </div>
                 <div class="flex items-center space-x-3">
-                    <button class="px-6 py-2.5 rounded-xl border border-gray-300 text-sm font-semibold hover:bg-white transition-colors" onclick="downloadAsset()">Add to Workspace</button>
-                    <button class="btn-primary px-8 py-2.5 rounded-xl text-sm font-semibold shadow-md" onclick="downloadAsset()">Download GLB/USDZ</button>
+                    <div class="text-right mr-4">
+                        <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Detected Format</p>
+                        <p id="formatDisplay" class="text-sm font-bold text-blue-600">Checking...</p>
+                    </div>
+                    <button class="btn-primary px-8 py-2.5 rounded-xl text-sm font-semibold shadow-md flex items-center space-x-2" onclick="downloadCurrentAsset()">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                        <span>Download <span id="btnFormat">Asset</span></span>
+                    </button>
                 </div>
             </div>
         </div>
     </div>
 
-    <div id="toast">Asset added to your local Realm library.</div>
+    <div id="toast">Ready for download. Redirecting to source...</div>
 
     <script>
         const API_BASE = "https://api.sketchfab.com/v3/search";
@@ -184,6 +190,7 @@
         let isFetching = false;
         let currentSearch = "";
         let currentCategory = "3d-models";
+        let currentActiveUid = null;
 
         const grid = document.getElementById('assetGrid');
         const loader = document.getElementById('loader');
@@ -199,16 +206,9 @@
             isFetching = true;
             loader.style.opacity = '1';
 
-            let targetUrl;
-            if (isNew) {
-                targetUrl = `${API_BASE}?type=models&q=${encodeURIComponent(currentSearch || currentCategory)}`;
-            } else {
-                targetUrl = nextUrl;
-            }
+            let targetUrl = isNew ? `${API_BASE}?type=models&q=${encodeURIComponent(currentSearch || currentCategory)}` : nextUrl;
 
-            // Safety check for URL validity
             if (!targetUrl || typeof targetUrl !== 'string' || !targetUrl.startsWith('http')) {
-                console.error("Invalid fetch target:", targetUrl);
                 isFetching = false;
                 loader.style.opacity = '0';
                 return;
@@ -221,13 +221,9 @@
                 if (!response.ok) throw new Error(`API error: ${response.status}`);
                 const data = await response.json();
                 
-                // SKETCHFAB API: Properly capture the next cursor/page
-                // We prioritize the full URL provided in cursors.next
                 if (data.cursors && typeof data.cursors.next === 'string' && data.cursors.next.startsWith('http')) {
                     nextUrl = data.cursors.next;
-                } 
-                // Fallback: manually construct if just an offset/cursor is provided
-                else if (data.cursors && data.cursors.next) {
+                } else if (data.cursors && data.cursors.next) {
                     nextUrl = `${API_BASE}?type=models&q=${encodeURIComponent(currentSearch || currentCategory)}&cursor=${data.cursors.next}`;
                 } else {
                     nextUrl = null; 
@@ -265,7 +261,7 @@
                         <div class="mt-auto pt-4 flex items-center justify-between">
                             <div class="flex items-center space-x-1">
                                 <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-                                <span class="text-[10px] font-black text-blue-500 uppercase">Available</span>
+                                <span class="text-[10px] font-black text-blue-500 uppercase">Interactive</span>
                             </div>
                             <div class="text-[11px] text-gray-400 flex items-center">
                                 <svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z"></path><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd"></path></svg>
@@ -275,6 +271,64 @@
                     </div>`;
                 grid.appendChild(card);
             });
+        }
+
+        async function openModal(uid, name) {
+            currentActiveUid = uid;
+            document.getElementById('modalTitle').innerText = name;
+            document.getElementById('formatDisplay').innerText = 'Detecting...';
+            document.getElementById('btnFormat').innerText = 'Asset';
+            modal.classList.remove('hidden');
+            document.body.style.overflow = 'hidden';
+            iframe.src = `https://sketchfab.com/models/${uid}/embed?autostart=1&internal=1&tracking=0&ui_ar=0&ui_infos=0&ui_watermark=0&ui_theme=dark`;
+            
+            // Detect file format via model info API
+            try {
+                const res = await fetch(`https://api.sketchfab.com/v3/models/${uid}`);
+                const data = await res.json();
+                
+                // Most modern models on Sketchfab are GLB/GLTF by default
+                let format = "GLB / GLTF";
+                if(data.isDownloadable) {
+                    format = "Original (" + (data.archives?.source?.extension || "GLB") + ")";
+                }
+                
+                document.getElementById('formatDisplay').innerText = format.toUpperCase();
+                document.getElementById('btnFormat').innerText = format.split(' ')[0];
+            } catch (e) {
+                document.getElementById('formatDisplay').innerText = "GLB / USDZ";
+            }
+
+            const container = document.getElementById('materialCircles');
+            container.innerHTML = '';
+            const palette = ['#4285F4', '#EA4335', '#FBBC05', '#34A853', '#777', '#111', '#ddd', '#a6c'];
+            for(let i=0; i<5; i++) {
+                const div = document.createElement('div');
+                div.className = "material-circle";
+                div.style.backgroundColor = palette[Math.floor(Math.random() * palette.length)];
+                container.appendChild(div);
+            }
+        }
+
+        function closeModal() {
+            modal.classList.add('hidden');
+            document.body.style.overflow = 'auto';
+            iframe.src = '';
+            currentActiveUid = null;
+        }
+
+        function downloadCurrentAsset() {
+            if(!currentActiveUid) return;
+            
+            const toast = document.getElementById("toast");
+            toast.className = "show";
+            
+            // Sketchfab downloads require authentication for direct API blobs, 
+            // so we redirect to the source download page which triggers the browser's download flow.
+            setTimeout(() => { 
+                toast.className = ""; 
+                window.open(`https://sketchfab.com/models/${currentActiveUid}/embed#download`, '_blank');
+            }, 1500);
         }
 
         searchForm.onsubmit = (e) => {
@@ -296,39 +350,10 @@
             }
         };
 
-        function openModal(uid, name) {
-            document.getElementById('modalTitle').innerText = name;
-            modal.classList.remove('hidden');
-            document.body.style.overflow = 'hidden';
-            iframe.src = `https://sketchfab.com/models/${uid}/embed?autostart=1&internal=1&tracking=0&ui_ar=0&ui_infos=0&ui_watermark=0&ui_theme=dark`;
-            const container = document.getElementById('materialCircles');
-            container.innerHTML = '';
-            const palette = ['#4285F4', '#EA4335', '#FBBC05', '#34A853', '#777', '#111', '#ddd', '#a6c'];
-            for(let i=0; i<5; i++) {
-                const div = document.createElement('div');
-                div.className = "material-circle";
-                div.style.backgroundColor = palette[Math.floor(Math.random() * palette.length)];
-                container.appendChild(div);
-            }
-        }
-
-        function closeModal() {
-            modal.classList.add('hidden');
-            document.body.style.overflow = 'auto';
-            iframe.src = '';
-        }
-
-        function downloadAsset() {
-            const toast = document.getElementById("toast");
-            toast.className = "show";
-            setTimeout(() => { toast.className = ""; }, 3000);
-        }
-
-        // Infinite Scroll Listener
         window.onscroll = () => {
             const scrollHeight = document.documentElement.scrollHeight;
             const scrollTop = window.innerHeight + window.scrollY;
-            if (scrollHeight - scrollTop < 1200) { // Trigger further up for smoother loading
+            if (scrollHeight - scrollTop < 1200) {
                 fetchModels();
             }
         };
